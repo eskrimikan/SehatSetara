@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Camera, ChevronDown, Loader2, LogOut, Save } from "lucide-react";
 import type { AuthSession, ProfileData } from "../types";
+import { apiFetch } from "../api";
 
 interface Props {
   auth: AuthSession;
@@ -48,7 +49,7 @@ export default function ProfileScreen({ auth, onLogout }: Props) {
 
     const loadServerProfile = async () => {
       try {
-        const response = await fetch("/profile", {
+        const response = await apiFetch("/profile", {
           headers: { Authorization: `Bearer ${auth.token}` },
         });
         if (!response.ok) return;
@@ -74,7 +75,7 @@ export default function ProfileScreen({ auth, onLogout }: Props) {
     const loadRegions = async () => {
       setLoadingRegions(true);
       try {
-        const response = await fetch("/regions/provinces");
+        const response = await apiFetch("/regions/provinces");
         const data = await response.json().catch(() => []);
         setProvinceOptions(Array.isArray(data) ? data.map((item: any) => ({ id: String(item.id), name: String(item.name) })) : []);
       } finally {
@@ -104,7 +105,7 @@ export default function ProfileScreen({ auth, onLogout }: Props) {
 
       setLoadingRegions(true);
       try {
-        const response = await fetch(`/regions/cities/${provinceId}`);
+        const response = await apiFetch(`/regions/cities/${provinceId}`);
         const data = await response.json().catch(() => []);
         const nextCities = Array.isArray(data) ? data.map((item: any) => ({ id: String(item.id), name: String(item.name) })) : [];
         setCityOptions(nextCities);
@@ -131,7 +132,7 @@ export default function ProfileScreen({ auth, onLogout }: Props) {
 
       setLoadingRegions(true);
       try {
-        const response = await fetch(`/regions/districts/${cityId}`);
+        const response = await apiFetch(`/regions/districts/${cityId}`);
         const data = await response.json().catch(() => []);
         const nextDistricts = Array.isArray(data) ? data.map((item: any) => ({ id: String(item.id), name: String(item.name) })) : [];
         setDistrictOptions(nextDistricts);
@@ -160,7 +161,7 @@ export default function ProfileScreen({ auth, onLogout }: Props) {
         const cityName = cityOptions.find((option) => option.id === cityId)?.name || profile.city;
         const districtName = districtOptions.find((option) => option.id === districtId)?.name || profile.district;
         const params = new URLSearchParams({ province: provinceName, city: cityName, district: districtName });
-        const response = await fetch(`/regions/hospitals?${params.toString()}`);
+        const response = await apiFetch(`/regions/hospitals?${params.toString()}`);
         const data = await response.json().catch(() => []);
         const nextHospitals = Array.isArray(data) ? data.map((item: any) => ({ id: String(item.id), name: String(item.name) })) : [];
         setHospitalOptions(nextHospitals);
@@ -191,7 +192,7 @@ export default function ProfileScreen({ auth, onLogout }: Props) {
     setStatus("");
 
     try {
-      const response = await fetch("/profile", {
+      const response = await apiFetch("/profile", {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",

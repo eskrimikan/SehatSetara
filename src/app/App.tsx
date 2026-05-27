@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Home, BookOpen, MapPin, Activity, Mic, Stethoscope, Menu, X, Plus, LogIn, UserRound } from "lucide-react";
+import { Home, BookOpen, MapPin, Activity, Mic, Stethoscope, Menu, X, Plus, LogIn, UserRound, LayoutDashboard } from "lucide-react";
 import HomeScreen, { type Screen } from "./components/HomeScreen";
 import MedicalInfoScreen from "./components/MedicalInfoScreen";
 import FaskesScreen from "./components/FaskesScreen";
@@ -8,7 +8,9 @@ import VoiceQAScreen from "./components/VoiceQAScreen";
 import AuthScreen from "./components/AuthScreen";
 import ProfileScreen from "./components/ProfileScreen";
 import PublishScreen from "./components/PublishScreen";
+import DashboardScreen from "./components/DashboardScreen";
 import type { AppScreen, Article, AuthSession } from "./types";
+import { apiFetch } from "./api";
 
 type MedTab = "penyakit" | "p3k" | "obat";
 
@@ -19,6 +21,8 @@ const navItems: { id: Screen; icon: typeof Home; label: string }[] = [
   { id: "lifestyle", icon: Activity, label: "Lifestyle" },
   { id: "qa", icon: Mic, label: "Tanya" },
 ];
+
+const superadminNavItem = { id: "dashboard" as Screen, icon: LayoutDashboard, label: "Dasbor" };
 
 const SESSION_KEY = "sehatsetara_session";
 
@@ -48,6 +52,7 @@ export default function App() {
   const [session, setSession] = useState<AuthSession | null>(null);
   const [articles, setArticles] = useState<Article[]>([]);
   const [articlesError, setArticlesError] = useState("");
+  const [dailyTip, setDailyTip] = useState<{ title: string; desc: string } | null>(null);
   const mainRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -87,12 +92,12 @@ export default function App() {
     return () => document.removeEventListener("mousedown", handler);
   }, [mobileMenuOpen]);
 
-  const isDoctor = !!session && ["dokter", "produsen"].includes(session.role);
+  const isSuperadmin = session?.role === "superadmin";
+  const canPublish = !!session && ["dokter", "produsen", "superadmin"].includes(session.role);
 
   const loadArticles = async () => {
     try {
-      const response = await fetch("/articles", {
-      });
+      const response = await apiFetch("/articles");
       const data = await response.json().catch(() => []);
       if (!response.ok) {
         throw new Error(data.error || "Gagal memuat artikel");
@@ -105,8 +110,25 @@ export default function App() {
     }
   };
 
+  const loadDailyTip = async () => {
+    try {
+      const response = await apiFetch("/site/daily-tip");
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "Gagal memuat tips kesehatan");
+      }
+      setDailyTip({
+        title: String(data.title || "Tidur 7–8 Jam Per Malam"),
+        desc: String(data.desc || "Tidur cukup meningkatkan imunitas dan membantu tubuh memperbaiki sel-sel yang rusak."),
+      });
+    } catch {
+      setDailyTip(null);
+    }
+  };
+
   useEffect(() => {
     loadArticles();
+    loadDailyTip();
   }, []);
 
   const navigate = (s: AppScreen, payload?: string) => {
@@ -136,6 +158,8 @@ export default function App() {
     setScreen("home");
     localStorage.removeItem(SESSION_KEY);
   };
+
+  const navItemsWithRole = isSuperadmin ? [...navItems, superadminNavItem] : navItems;
 
   return (
     <div className="size-full flex flex-col" style={{ background: "#f0f5ff" }}>
@@ -168,7 +192,7 @@ export default function App() {
           <div className="flex-1" />
 
           <nav className="hidden sm:flex items-center gap-0">
-            {navItems.map(({ id, label }) => {
+            {navItemsWithRole.map(({ id, label }) => {
               const active = screen === id;
               return (
                 <button
@@ -190,7 +214,7 @@ export default function App() {
               );
             })}
 
-            {isDoctor && (
+            {canPublish && (
               <button
                 onClick={() => navigate("publish")}
                 className="flex items-center justify-center w-9 h-9 rounded-full ml-2 transition-all"
@@ -264,7 +288,7 @@ export default function App() {
               pointerEvents: "auto",
             }}
           >
-            {navItems.map(({ id, icon: Icon, label }) => {
+            {navItemsWithRole.map(({ id, icon: Icon, label }) => {
               const active = screen === id;
               return (
                 <button
@@ -281,7 +305,7 @@ export default function App() {
               );
             })}
 
-            {isDoctor && (
+            {canPublish && (
               <button
                 onClick={() => navigate("publish")}
                 className="w-full flex items-center gap-3 px-4 py-3.5 text-left transition-colors border-b border-blue-50"
@@ -322,7 +346,7 @@ export default function App() {
       </header>
 
       <main ref={mainRef} className="flex-1 overflow-y-auto min-h-0">
-        {screen === "home" && <HomeScreen onNavigate={(s, tab) => navigate(s, tab)} articles={articles} articleError={articlesError} />}
+        {screen === "home" && <HomeScreen onNavigate={(s, tab) => navigate(s, tab)} articles={articles} articleError={articlesError} dailyTip={dailyTip || undefined} />}
         {screen !== "home" && (
           <div className="h-full flex flex-col pt-14 sm:pt-16">
             {screen === "medical" && <MedicalInfoScreen initialTab={medTab} />}
@@ -332,8 +356,10 @@ export default function App() {
             {screen === "auth" && <AuthScreen onAuthSuccess={onAuthSuccess} />}
             {screen === "profile" && session && <ProfileScreen auth={session} onLogout={onLogout} />}
             {screen === "profile" && !session && <AuthScreen onAuthSuccess={onAuthSuccess} />}
-            {screen === "publish" && session && isDoctor && <PublishScreen token={session.token} onPublished={loadArticles} />}
-            {screen === "publish" && (!session || !isDoctor) && <AuthScreen onAuthSuccess={onAuthSuccess} />}
+            {screen === "publish" && session && canPublish && <PublishScreen token={session.token} onPublished={loadArticles} />}
+            {screen === "publish" && (!session || !canPublish) && <AuthScreen onAuthSuccess={onAuthSuccess} />}
+            {screen === "dashboard" && session && isSuperadmin && <DashboardScreen auth={session} onRefresh={async () => { await Promise.all([loadArticles(), loadDailyTip()]); }} />}
+            {screen === "dashboard" && (!session || !isSuperadmin) && <AuthScreen onAuthSuccess={onAuthSuccess} />}
           </div>
         )}
       </main>

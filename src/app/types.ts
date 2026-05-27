@@ -1,5 +1,5 @@
 export type BaseScreen = "home" | "medical" | "faskes" | "lifestyle" | "qa";
-export type AppScreen = BaseScreen | "auth" | "profile" | "publish";
+export type AppScreen = BaseScreen | "auth" | "profile" | "publish" | "dashboard";
 
 export interface AuthSession {
   token: string;

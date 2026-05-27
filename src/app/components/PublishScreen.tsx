@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { PlusCircle } from "lucide-react";
+import { apiFetch } from "../api";
+import RichTextEditor, { htmlHasVisibleContent } from "./RichTextEditor";
 
 interface Props {
   token: string;
@@ -16,7 +18,7 @@ export default function PublishScreen({ token, onPublished }: Props) {
     event.preventDefault();
     setStatus(null);
 
-    if (!title.trim() || !content.trim()) {
+    if (!title.trim() || !htmlHasVisibleContent(content)) {
       setStatus({ kind: "err", text: "Judul dan isi wajib diisi" });
       return;
     }
@@ -25,9 +27,9 @@ export default function PublishScreen({ token, onPublished }: Props) {
       setIsLoading(true);
       const form = new FormData();
       form.append("title", title.trim());
-      form.append("content", content.trim());
+      form.append("content", content);
 
-      const response = await fetch("/articles", {
+      const response = await apiFetch("/articles", {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: form,
@@ -53,7 +55,7 @@ export default function PublishScreen({ token, onPublished }: Props) {
     <div className="h-full px-4 sm:px-8 pt-18 sm:pt-22 pb-8">
       <div className="max-w-3xl mx-auto bg-white rounded-3xl border border-blue-100 shadow-sm p-5 sm:p-8">
         <h1 className="text-[#1a2560] text-2xl font-semibold mb-2">Tulis Artikel</h1>
-        <p className="text-[#6b7ab8] text-sm mb-6">Sementara: Judul, Isi, lalu Publish.</p>
+        <p className="text-[#6b7ab8] text-sm mb-6">Tulis artikel dengan toolbar, gambar, link, dan shortcut keyboard.</p>
 
         <form onSubmit={submit} className="space-y-4">
           <label className="block">
@@ -65,15 +67,12 @@ export default function PublishScreen({ token, onPublished }: Props) {
             />
           </label>
 
-          <label className="block">
+          <div className="block">
             <span className="text-sm text-[#1a2560]">Isi</span>
-            <textarea
-              rows={7}
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              className="mt-1.5 w-full border border-blue-100 rounded-2xl px-3 py-3 outline-none resize-y"
-            />
-          </label>
+            <div className="mt-1.5">
+              <RichTextEditor value={content} token={token} onChange={setContent} />
+            </div>
+          </div>
 
           {status && (
             <div className={`text-sm rounded-2xl px-3 py-2 border ${status.kind === "ok" ? "text-emerald-700 bg-emerald-50 border-emerald-100" : "text-red-700 bg-red-50 border-red-100"}`}>

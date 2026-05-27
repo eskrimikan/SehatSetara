@@ -7,19 +7,31 @@ import {
 import type { LucideIcon } from "lucide-react";
 import heroImg from "../../imports/image-5.png";
 import type { Article } from "../types";
+import { rewriteApiMediaUrls } from "../api";
 
-export type Screen = "home" | "medical" | "faskes" | "lifestyle" | "qa";
+export type Screen = "home" | "medical" | "faskes" | "lifestyle" | "qa" | "dashboard";
 
 interface Props {
   onNavigate: (screen: Screen, tab?: string) => void;
   articles?: Article[];
   articleError?: string;
+  dailyTip?: { title: string; desc: string };
 }
 
 interface HealthTip {
   icon: LucideIcon;
   title: string;
   desc: string;
+}
+
+function htmlToText(html: string) {
+  return html
+    .replace(/<\/(p|div|h1|h2|h3|li|blockquote)>/gi, "\n")
+    .replace(/<br\s*\/?>(\n)?/gi, "\n")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 const healthTips: HealthTip[] = [
@@ -29,8 +41,6 @@ const healthTips: HealthTip[] = [
   { icon: Moon,     title: "Tidur 7–8 Jam Per Malam",         desc: "Tidur cukup meningkatkan imunitas dan membantu tubuh memperbaiki sel-sel yang rusak." },
   { icon: Activity, title: "Aktif Bergerak 30 Menit",          desc: "Jalan kaki 30 menit per hari menurunkan risiko penyakit jantung, diabetes, dan depresi." },
 ];
-
-const todayTip = healthTips[new Date().getDay() % healthTips.length];
 
 const emergencyNumbers = [
   { name: "Ambulans / IGD",   number: "119", icon: AlertCircle, color: "bg-[#fff5f5] border-[#ffdcdc]", text: "text-[#f84848]" },
@@ -52,7 +62,7 @@ const stats = [
   { label: "Faskes terdekat",         value: "7",   sub: "Peta & kontak darurat",        icon: Building2     },
 ];
 
-export default function HomeScreen({ onNavigate, articles = [], articleError }: Props) {
+export default function HomeScreen({ onNavigate, articles = [], articleError, dailyTip }: Props) {
   const [chatInput, setChatInput] = useState("");
   const [isListening, setIsListening] = useState(false);
   const [selectedArticle, setSelectedArticle] = useState<Article | null>(null);
@@ -63,7 +73,8 @@ export default function HomeScreen({ onNavigate, articles = [], articleError }: 
   const hour    = now.getHours();
   const greeting = hour < 12 ? "Selamat Pagi" : hour < 17 ? "Selamat Siang" : "Selamat Malam";
   const dayName  = now.toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-  const TipIcon  = todayTip.icon;
+  const todayTip = dailyTip || healthTips[new Date().getDay() % healthTips.length];
+  const TipIcon  = dailyTip ? Sun : todayTip.icon;
   const featuredArticles = articles.slice(0, 4);
 
   // === EFEK SCROLL REVEAL (Intersection Observer) ===
@@ -453,7 +464,8 @@ export default function HomeScreen({ onNavigate, articles = [], articleError }: 
           ) : (
             <div className="grid gap-3 lg:grid-cols-2">
               {featuredArticles.map((article) => {
-                const preview = article.content.length > 130 ? `${article.content.slice(0, 130).trim()}...` : article.content;
+                const plainPreview = htmlToText(article.content) || (/<(img|video|iframe|embed|object)\b/i.test(article.content) ? "Artikel berisi media" : "");
+                const preview = plainPreview.length > 130 ? `${plainPreview.slice(0, 130).trim()}...` : plainPreview;
                 return (
                   <button
                     key={article.id}
@@ -516,11 +528,39 @@ export default function HomeScreen({ onNavigate, articles = [], articleError }: 
                 {selectedArticle.authorDistrict && <span className="rounded-full px-3 py-1 bg-blue-50">{selectedArticle.authorDistrict}</span>}
               </div>
 
-              <div className="text-sm leading-7 text-[#32406e] whitespace-pre-line">{selectedArticle.content}</div>
+              <div className="article-content text-sm leading-7 text-[#32406e]" dangerouslySetInnerHTML={{ __html: rewriteApiMediaUrls(selectedArticle.content) }} />
             </div>
           </div>
         </div>
       )}
+
+      <style>{`
+        .article-content :is(p, ul, ol, blockquote) {
+          margin-bottom: 1rem;
+        }
+        .article-content :is(h1, h2, h3) {
+          color: #1a2560;
+          font-weight: 700;
+          margin: 1.25rem 0 0.75rem;
+        }
+        .article-content h2 {
+          font-size: 1.35rem;
+          line-height: 1.25;
+        }
+        .article-content a {
+          color: #5b74f5;
+          text-decoration: underline;
+          text-underline-offset: 3px;
+        }
+        .article-content img,
+        .article-content video {
+          width: 100%;
+          max-width: 100%;
+          border-radius: 20px;
+          margin: 1rem 0;
+          box-shadow: 0 12px 35px rgba(91, 116, 245, 0.12);
+        }
+      `}</style>
     </div>
   );
 }

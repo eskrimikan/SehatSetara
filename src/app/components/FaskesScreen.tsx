@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import { Clock, MapPin, Navigation, Phone, ChevronLeft, Building2, Stethoscope, Pill, Baby, Cross, LocateFixed, Loader2, Search, RefreshCw } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { apiFetch } from "../api";
 
 type FacilityType = "puskesmas" | "klinik" | "apotek" | "bidan" | "rs";
 
@@ -189,7 +190,7 @@ export default function FaskesScreen(_props: Props) {
       setLoadingFacilities(true);
       setLoadError("");
       try {
-        const response = await fetch("/faskes/nearby", {
+        const response = await apiFetch("/faskes/nearby", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ lat: center.lat, lng: center.lng, radius: 6000 }),

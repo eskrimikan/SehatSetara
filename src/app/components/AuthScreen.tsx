@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { LogIn, UserPlus } from "lucide-react";
 import type { AuthSession } from "../types";
+import { apiFetch } from "../api";
 
 interface Props {
   onAuthSuccess: (session: AuthSession) => void;
@@ -33,7 +34,7 @@ export default function AuthScreen({ onAuthSuccess }: Props) {
       setIsLoading(true);
 
       if (mode === "register") {
-        const registerResponse = await fetch("/register", {
+        const registerResponse = await apiFetch("/register", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ username: username.trim(), password, role }),
@@ -43,9 +44,14 @@ export default function AuthScreen({ onAuthSuccess }: Props) {
         if (!registerResponse.ok) {
           throw new Error(registerData.error || "Registrasi gagal");
         }
+
+        if (registerData.isApproved === false || role === "dokter") {
+          setError(registerData.message || "Pendaftaran dokter menunggu persetujuan admin");
+          return;
+        }
       }
 
-      const loginResponse = await fetch("/login", {
+      const loginResponse = await apiFetch("/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: username.trim(), password }),
