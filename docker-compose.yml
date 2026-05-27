@@ -21,8 +21,8 @@ services:
     environment:
       DATABASE_URL: postgresql://sehatsetara:sehatsetara@db:5432/sehatsetara
       JWT_SECRET: sehatsetara-secret
-    ports:
-      - "8080:8080"
+    expose:
+      - "8080"
     depends_on:
       db:
         condition: service_healthy
@@ -30,12 +30,12 @@ services:
   frontend:
     build:
       context: .
-    environment:
-      VITE_API_BASE_URL: http://backend:8080
-    ports:
-      - "5173:5173"
+      args:
+        VITE_API_BASE_URL: /api
     depends_on:
       - backend
+    ports:
+      - "80:80"
 
 volumes:
   sehatsetara_pgdata:

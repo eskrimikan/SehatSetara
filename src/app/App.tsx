@@ -93,7 +93,7 @@ export default function App() {
   }, [mobileMenuOpen]);
 
   const isSuperadmin = session?.role === "superadmin";
-  const canPublish = !!session && ["dokter", "produsen", "superadmin"].includes(session.role);
+  const canPublish = !!session && ["dokter", "superadmin"].includes(session.role);
 
   const loadArticles = async () => {
     try {

@@ -23,15 +23,40 @@ const habitDefs: { id: string; icon: LucideIcon; label: string; category: string
   { id: "stress",   icon: Bed,        label: "Luangkan waktu relaksasi",             category: "Mental"     },
 ];
 
-const STORAGE_KEY = "sehatsetara_habits2";
-const WATER_KEY   = "sehatsetara_water";
-const DATE_KEY    = "sehatsetara_date";
+const STORAGE_KEY = "sehatsetara_habits2"; // base key, will append user suffix
+const WATER_KEY   = "sehatsetara_water";  // base key
+const DATE_KEY    = "sehatsetara_date";   // base key
+
+function getUserSuffix() {
+  try {
+    const raw = localStorage.getItem('sehatsetara_session');
+    if (!raw) return 'anon';
+    const parsed = JSON.parse(raw);
+    return parsed && parsed.username ? String(parsed.username) : 'anon';
+  } catch {
+    return 'anon';
+  }
+}
+
+function userKey(base: string) {
+  const suffix = getUserSuffix();
+  return `${base}_${suffix}`;
+}
 
 function loadHabits(): Habit[] {
   try {
     const today = new Date().toDateString();
-    const raw   = localStorage.getItem(STORAGE_KEY);
-    const date  = localStorage.getItem(DATE_KEY);
+    const key = userKey(STORAGE_KEY);
+    const dateKey = userKey(DATE_KEY);
+
+    // If user-specific data missing but global exists, copy it for this user (non-destructive migration)
+    const globalRaw = localStorage.getItem(STORAGE_KEY);
+    if (!localStorage.getItem(key) && globalRaw) {
+      localStorage.setItem(key, globalRaw);
+    }
+
+    const raw = localStorage.getItem(key);
+    const date = localStorage.getItem(dateKey) || localStorage.getItem(DATE_KEY);
     if (raw) {
       const saved: { id: string; done: boolean; streak: number }[] = JSON.parse(raw);
       const merged = habitDefs.map((def) => {
@@ -39,23 +64,34 @@ function loadHabits(): Habit[] {
         if (date !== today) return { ...def, done: false, streak: s.done ? s.streak : 0 };
         return { ...def, done: s.done, streak: s.streak };
       });
-      if (date !== today) localStorage.setItem(DATE_KEY, today);
+      if (date !== today) localStorage.setItem(dateKey, today);
       return merged;
     }
   } catch {}
-  localStorage.setItem(DATE_KEY, new Date().toDateString());
+  localStorage.setItem(userKey(DATE_KEY), new Date().toDateString());
   return habitDefs.map((def) => ({ ...def, done: false, streak: 0 }));
 }
 
 function saveHabits(habits: Habit[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(habits.map(({ id, done, streak }) => ({ id, done, streak }))));
+  localStorage.setItem(userKey(STORAGE_KEY), JSON.stringify(habits.map(({ id, done, streak }) => ({ id, done, streak }))));
 }
 
 function loadWater(): number {
   try {
     const today = new Date().toDateString();
-    if (localStorage.getItem(DATE_KEY) === today)
-      return parseInt(localStorage.getItem(WATER_KEY) || "0") || 0;
+    const dateKey = userKey(DATE_KEY);
+    const waterKey = userKey(WATER_KEY);
+
+    // migrate global water/date if user-specific not present
+    if (!localStorage.getItem(dateKey) && localStorage.getItem(DATE_KEY)) {
+      localStorage.setItem(dateKey, localStorage.getItem(DATE_KEY) || '');
+    }
+    if (!localStorage.getItem(waterKey) && localStorage.getItem(WATER_KEY)) {
+      localStorage.setItem(waterKey, localStorage.getItem(WATER_KEY) || '0');
+    }
+
+    if (localStorage.getItem(dateKey) === today)
+      return parseInt(localStorage.getItem(waterKey) || "0") || 0;
   } catch {}
   return 0;
 }

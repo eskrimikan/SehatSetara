@@ -69,6 +69,7 @@ async function initSchema() {
       password TEXT NOT NULL,
       role TEXT NOT NULL,
       is_approved BOOLEAN NOT NULL DEFAULT TRUE,
+      requested_role TEXT NOT NULL DEFAULT '',
       full_name TEXT DEFAULT '',
       age TEXT DEFAULT '',
       province TEXT DEFAULT '',
@@ -80,6 +81,8 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS requested_role TEXT NOT NULL DEFAULT ''`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS articles (
@@ -161,6 +164,8 @@ async function initSchema() {
       { title: 'Tidur 7–8 Jam Per Malam', desc: 'Tidur cukup meningkatkan imunitas dan membantu tubuh memperbaiki sel-sel yang rusak.' },
     ],
   );
+
+  await pool.query(`UPDATE users SET role = 'dokter' WHERE role = 'produsen'`);
 }
 
 const ready = (async () => {

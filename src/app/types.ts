@@ -5,6 +5,9 @@ export interface AuthSession {
   token: string;
   username: string;
   role: string;
+  isApproved?: boolean;
+  pendingDoctor?: boolean;
+  requestedRole?: string;
 }
 
 export interface Article {

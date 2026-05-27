@@ -8,7 +8,7 @@ async function testRegister() {
       body: JSON.stringify({
         username: "dokter",
         password: "rahasia123",
-        role: "produsen"
+        role: "dokter"
       })
     });
     const data = await response.json();

@@ -4,7 +4,11 @@ function getRuntimeBaseUrl() {
   const storedBaseUrl = window.localStorage.getItem("sehatsetara_api_base_url") || "";
   if (storedBaseUrl) return storedBaseUrl;
 
-  return `http://${window.location.hostname}:8080`;
+  if (import.meta.env.DEV) {
+    return "http://localhost:8080";
+  }
+
+  return "/api";
 }
 
 const rawBaseUrl = import.meta.env.VITE_API_BASE_URL || getRuntimeBaseUrl();

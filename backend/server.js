@@ -79,20 +79,20 @@ app.post('/register', async (req, res) => {
 
     const allowedRole = ['pengguna', 'dokter'].includes(role) ? role : 'pengguna';
     const trimmedUsername = String(username).trim();
-    const existingUser = await db.get('SELECT id, role, is_approved FROM users WHERE username = ?', [trimmedUsername]);
+    const existingUser = await db.get('SELECT id, role, is_approved, requested_role FROM users WHERE username = ?', [trimmedUsername]);
 
     if (existingUser) {
-      if (existingUser.role === 'dokter' && existingUser.is_approved === false && allowedRole === 'dokter') {
+      if (existingUser.requested_role === 'dokter' && existingUser.is_approved === false && allowedRole === 'dokter') {
         const hashedPassword = await bcrypt.hash(password, 10);
-        await db.run('UPDATE users SET password = ?, role = ?, is_approved = FALSE WHERE id = ?', [hashedPassword, allowedRole, existingUser.id]);
+        await db.run('UPDATE users SET password = ?, role = ?, requested_role = ?, is_approved = FALSE WHERE id = ?', [hashedPassword, 'pengguna', 'dokter', existingUser.id]);
         await logAudit({
           actorId: existingUser.id,
           actorUsername: trimmedUsername,
-          actorRole: allowedRole,
+          actorRole: 'pengguna',
           action: 'register_resubmit',
           targetType: 'user',
           targetId: String(existingUser.id),
-          metadata: { role: allowedRole },
+          metadata: { role: 'pengguna', requestedRole: 'dokter' },
           ipAddress: getRequestIp(req),
         });
         return res.status(200).json({
@@ -107,23 +107,24 @@ app.post('/register', async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const isApproved = allowedRole === 'pengguna';
-    const query = 'INSERT INTO users (username, password, role, is_approved) VALUES (?, ?, ?, ?)';
+    const requestedRole = allowedRole === 'dokter' ? 'dokter' : '';
+    const query = 'INSERT INTO users (username, password, role, is_approved, requested_role) VALUES (?, ?, ?, ?, ?)';
 
-    db.run(query, [trimmedUsername, hashedPassword, allowedRole, isApproved ? 1 : 0], function(err) {
+    db.run(query, [trimmedUsername, hashedPassword, isApproved ? 'pengguna' : 'pengguna', isApproved ? 1 : 0, requestedRole], function(err) {
       if (err) {
         return res.status(400).json({ error: 'Username sudah dipakai' });
       }
       logAudit({
         actorId: this.lastID,
         actorUsername: trimmedUsername,
-        actorRole: allowedRole,
+        actorRole: isApproved ? 'pengguna' : 'pengguna',
         action: 'register',
         targetType: 'user',
         targetId: String(this.lastID || ''),
-        metadata: { role: allowedRole },
+        metadata: { role: isApproved ? 'pengguna' : 'pengguna', requestedRole },
         ipAddress: getRequestIp(req),
       });
-      res.status(201).json({ message: isApproved ? 'Registrasi sukses' : 'Pendaftaran dokter menunggu persetujuan admin', userId: this.lastID, isApproved });
+      res.status(201).json({ message: isApproved ? 'Registrasi sukses' : 'Pendaftaran dokter menunggu persetujuan admin', userId: this.lastID, isApproved, requestedRole });
     });
   } catch (error) {
     res.status(500).json({ error: 'Error di server.' });
@@ -140,8 +141,9 @@ app.post('/login', (req, res) => {
     if (err) return res.status(500).json({ error: 'Error di server.' });
     if (!user) return res.status(404).json({ error: 'User tidak ditemukan' });
 
-    if (user.is_approved === false) {
-      return res.status(403).json({ error: user.role === 'dokter' ? 'Akun dokter menunggu persetujuan admin' : 'Akun belum disetujui' });
+    const isDoctorPending = user.requested_role === 'dokter' && user.is_approved === false;
+    if (user.is_approved === false && !isDoctorPending) {
+      return res.status(403).json({ error: 'Akun belum disetujui' });
     }
 
     const passwordValid = bcrypt.compareSync(password, user.password);
@@ -158,11 +160,15 @@ app.post('/login', (req, res) => {
       ipAddress: getRequestIp(req),
     });
 
-    const token = jwt.sign({ id: user.id, role: user.role, username: user.username }, SECRET_KEY, { expiresIn: '1d' });
+    const effectiveRole = isDoctorPending ? 'pengguna' : user.role;
+    const token = jwt.sign({ id: user.id, role: effectiveRole, username: user.username, pendingDoctor: isDoctorPending }, SECRET_KEY, { expiresIn: '1d' });
     res.json({
       token,
-      role: user.role,
+      role: effectiveRole,
       username: user.username,
+      isApproved: !isDoctorPending,
+      pendingDoctor: isDoctorPending,
+      requestedRole: user.requested_role || user.role,
       profile: {
         fullName: user.full_name || '',
         age: user.age || '',
@@ -227,7 +233,7 @@ app.post('/articles', authenticateToken, upload.none(), (req, res) => {
     return res.status(400).json({ error: 'Judul dan isi artikel wajib diisi' });
   }
 
-  const canPublish = ['dokter', 'produsen', 'superadmin'].includes(req.user.role);
+  const canPublish = ['dokter', 'superadmin'].includes(req.user.role);
   if (!canPublish) {
     return res.status(403).json({ error: 'Role ini tidak boleh publish artikel' });
   }
@@ -383,7 +389,9 @@ app.get('/admin/users', authenticateToken, requireRole(SUPERADMIN_ROLE), async (
 app.patch('/admin/users/:id/status', authenticateToken, requireRole(SUPERADMIN_ROLE), async (req, res) => {
   try {
     const isApproved = Boolean(req.body?.isApproved);
-    await db.run('UPDATE users SET is_approved = ? WHERE id = ?', [isApproved, req.params.id]);
+    const userRow = await db.get('SELECT id, requested_role, role FROM users WHERE id = ?', [req.params.id]);
+    const nextRole = isApproved && userRow?.requested_role === 'dokter' ? 'dokter' : userRow?.role || 'pengguna';
+    await db.run('UPDATE users SET is_approved = ?, role = ?, requested_role = ? WHERE id = ?', [isApproved, nextRole, isApproved ? '' : (userRow?.requested_role || ''), req.params.id]);
     await logAudit({
       actorId: req.user.id,
       actorUsername: req.user.username || '',

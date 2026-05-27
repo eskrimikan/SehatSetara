@@ -176,7 +176,7 @@ export default function ProfileScreen({ auth, onLogout }: Props) {
     loadHospitals();
   }, [districtId, districtOptions, cityId, cityOptions, provinceId, provinceOptions, profile.city, profile.district, profile.hospitalName, profile.province]);
 
-  const isDoctor = ["dokter", "produsen"].includes(auth.role);
+  const isDoctor = ["dokter"].includes(auth.role);
 
   const handleFile = (file?: File) => {
     if (!file) return;
