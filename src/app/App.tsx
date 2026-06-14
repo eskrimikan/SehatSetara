@@ -94,6 +94,7 @@ export default function App() {
 
   const isSuperadmin = session?.role === "superadmin";
   const canPublish = !!session && ["dokter", "superadmin"].includes(session.role);
+  const isAuthenticated = !!session;
 
   const loadArticles = async () => {
     try {
@@ -131,6 +132,12 @@ export default function App() {
     loadDailyTip();
   }, []);
 
+  useEffect(() => {
+    if (!session && (screen === "lifestyle" || screen === "qa")) {
+      setScreen("home");
+    }
+  }, [screen, session]);
+
   const navigate = (s: AppScreen, payload?: string) => {
     setScreen(s);
     setMobileMenuOpen(false);
@@ -160,6 +167,9 @@ export default function App() {
   };
 
   const navItemsWithRole = isSuperadmin ? [...navItems, superadminNavItem] : navItems;
+  const visibleNavItems = isAuthenticated
+    ? navItemsWithRole
+    : navItemsWithRole.filter((item) => item.id !== "lifestyle" && item.id !== "qa");
 
   return (
     <div className="size-full flex flex-col" style={{ background: "#f0f5ff" }}>
@@ -192,7 +202,7 @@ export default function App() {
           <div className="flex-1" />
 
           <nav className="hidden sm:flex items-center gap-0">
-            {navItemsWithRole.map(({ id, label }) => {
+            {visibleNavItems.map(({ id, label }) => {
               const active = screen === id;
               return (
                 <button
@@ -288,7 +298,7 @@ export default function App() {
               pointerEvents: "auto",
             }}
           >
-            {navItemsWithRole.map(({ id, icon: Icon, label }) => {
+            {visibleNavItems.map(({ id, icon: Icon, label }) => {
               const active = screen === id;
               return (
                 <button
@@ -346,13 +356,13 @@ export default function App() {
       </header>
 
       <main ref={mainRef} className="flex-1 overflow-y-auto min-h-0">
-        {screen === "home" && <HomeScreen onNavigate={(s, tab) => navigate(s, tab)} articles={articles} articleError={articlesError} dailyTip={dailyTip || undefined} />}
+        {screen === "home" && <HomeScreen onNavigate={(s, tab) => navigate(s, tab)} articles={articles} articleError={articlesError} dailyTip={dailyTip || undefined} isAuthenticated={isAuthenticated} />}
         {screen !== "home" && (
           <div className="h-full flex flex-col pt-14 sm:pt-16">
             {screen === "medical" && <MedicalInfoScreen initialTab={medTab} />}
             {screen === "faskes" && <FaskesScreen />}
-            {screen === "lifestyle" && <LifestyleScreen />}
-            {screen === "qa" && <VoiceQAScreen initialQuery={qaQuery} clearQuery={() => setQaQuery("")} />}
+            {screen === "lifestyle" && session && <LifestyleScreen authToken={session.token} />}
+            {screen === "qa" && session && <VoiceQAScreen authToken={session.token} initialQuery={qaQuery} clearQuery={() => setQaQuery("")} />}
             {screen === "auth" && <AuthScreen onAuthSuccess={onAuthSuccess} />}
             {screen === "profile" && session && <ProfileScreen auth={session} onLogout={onLogout} />}
             {screen === "profile" && !session && <AuthScreen onAuthSuccess={onAuthSuccess} />}

@@ -16,6 +16,7 @@ interface Props {
   articles?: Article[];
   articleError?: string;
   dailyTip?: { title: string; desc: string };
+  isAuthenticated?: boolean;
 }
 
 interface HealthTip {
@@ -62,7 +63,7 @@ const stats = [
   { label: "Faskes terdekat",         value: "7",   sub: "Peta & kontak darurat",        icon: Building2     },
 ];
 
-export default function HomeScreen({ onNavigate, articles = [], articleError, dailyTip }: Props) {
+export default function HomeScreen({ onNavigate, articles = [], articleError, dailyTip, isAuthenticated = false }: Props) {
   const [chatInput, setChatInput] = useState("");
   const [isListening, setIsListening] = useState(false);
   const [selectedArticle, setSelectedArticle] = useState<Article | null>(null);
@@ -99,7 +100,15 @@ export default function HomeScreen({ onNavigate, articles = [], articleError, da
     return () => observer.disconnect();
   }, []);
 
+  const protectedQuickActions = isAuthenticated
+    ? quickActions
+    : quickActions.filter((action) => action.screen !== "lifestyle" && action.screen !== "qa");
+
   const submitChat = () => {
+    if (!isAuthenticated) {
+      onNavigate("auth");
+      return;
+    }
     if (chatInput.trim()) {
       onNavigate("qa", chatInput.trim());
       setChatInput("");
@@ -109,6 +118,10 @@ export default function HomeScreen({ onNavigate, articles = [], articleError, da
   };
 
   const startVoice = () => {
+    if (!isAuthenticated) {
+      onNavigate("auth");
+      return;
+    }
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) { alert("Browser Anda tidak mendukung fitur pengenalan suara. Gunakan Chrome atau Safari terbaru."); return; }
     if (isListening) { recogRef.current?.stop(); setIsListening(false); return; }
@@ -238,37 +251,48 @@ export default function HomeScreen({ onNavigate, articles = [], articleError, da
               </p>
             </div>
 
-            {/* Gemini-style chat bar */}
-            <div className="w-full max-w-2xl animate-hero-3">
-              <div className="flex items-center gap-2 md:gap-3 rounded-full px-3 py-2.5 bg-[rgba(237,242,253,0.30)] backdrop-blur-xl border border-[#FFFFFF2E] shadow-[0_4px_32px_rgba(0,0,0,0.2)]">
-                <input
-                  type="text"
-                  className="chat-bar-input flex-1 bg-transparent outline-none text-white text-sm pl-2 min-w-0"
-                  style={{ caretColor: "#7a9bf8" }}
-                  placeholder={isListening ? "Mendengarkan..." : "Ketik keluhan Anda..."}
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter" && chatInput.trim()) submitChat(); }}
-                />
-                {chatInput.trim() ? (
-                  <button
-                    onClick={submitChat}
-                    className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 transition-all"
-                    style={{ background: "linear-gradient(135deg, #5b74f5, #7a9bf8)" }}
-                  >
-                    <Send size={16} className="text-white" />
-                  </button>
-                ) : (
-                  <button
-                    onClick={startVoice}
-                    className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 transition-colors ${isListening ? "animate-pulse" : ""}`}
-                    style={{ background: isListening ? "#f84848" : "rgba(255,255,255,0.12)" }}
-                  >
-                    <Mic size={18} className={isListening ? "text-white" : "text-white/80"} />
-                  </button>
-                )}
+            {isAuthenticated ? (
+              <div className="w-full max-w-2xl animate-hero-3">
+                <div className="flex items-center gap-2 md:gap-3 rounded-full px-3 py-2.5 bg-[rgba(237,242,253,0.30)] backdrop-blur-xl border border-[#FFFFFF2E] shadow-[0_4px_32px_rgba(0,0,0,0.2)]">
+                  <input
+                    type="text"
+                    className="chat-bar-input flex-1 bg-transparent outline-none text-white text-sm pl-2 min-w-0"
+                    style={{ caretColor: "#7a9bf8" }}
+                    placeholder={isListening ? "Mendengarkan..." : "Ketik keluhan Anda..."}
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && chatInput.trim()) submitChat(); }}
+                  />
+                  {chatInput.trim() ? (
+                    <button
+                      onClick={submitChat}
+                      className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 transition-all"
+                      style={{ background: "linear-gradient(135deg, #5b74f5, #7a9bf8)" }}
+                    >
+                      <Send size={16} className="text-white" />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={startVoice}
+                      className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 transition-colors ${isListening ? "animate-pulse" : ""}`}
+                      style={{ background: isListening ? "#f84848" : "rgba(255,255,255,0.12)" }}
+                    >
+                      <Mic size={18} className={isListening ? "text-white" : "text-white/80"} />
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="w-full max-w-2xl animate-hero-3">
+                <button
+                  onClick={() => onNavigate("auth")}
+                  className="w-full rounded-full px-5 py-3 text-white font-medium shadow-[0_4px_32px_rgba(0,0,0,0.2)]"
+                  style={{ background: "linear-gradient(135deg, #5b74f5, #7a9bf8)" }}
+                >
+                  Login dulu untuk akses Tanya dan Gaya Hidup
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -364,7 +388,7 @@ export default function HomeScreen({ onNavigate, articles = [], articleError, da
         <div className="mb-4">
           <h2 className="text-[#1a2560] text-base font-semibold mb-3 px-0.5 reveal-on-scroll">Akses Cepat</h2>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            {quickActions.map((action, i) => {
+            {protectedQuickActions.map((action, i) => {
               const Icon = action.icon;
               return (
                 <div key={i} className="reveal-on-scroll h-full" style={{ transitionDelay: `${i * 100}ms` }}>

@@ -12,6 +12,119 @@ app.use(express.json());
 const SECRET_KEY = process.env.JWT_SECRET || 'sehatsetara-secret';
 const SUPERADMIN_ROLE = 'superadmin';
 
+const healthScopeSpec = {
+  allowedTopics: [
+    'gejala penyakit',
+    'pertolongan pertama',
+    'obat dan dosis umum',
+    'gaya hidup sehat',
+    'gizi dan nutrisi',
+    'kehamilan umum',
+    'kesehatan anak',
+    'kesehatan mental umum',
+    'rumah sakit, klinik, dan faskes',
+  ],
+  disallowedTopics: [
+    'image generation',
+    'generasi gambar',
+    'video generation',
+    'audio generation',
+    'coding',
+    'pemrograman',
+    'hacking',
+    'crypto',
+    'pengambilan keputusan medis definitif',
+    'diagnosis pasti',
+  ],
+};
+
+const healthCategories = [
+  { key: 'water', label: 'Minum Air' },
+  { key: 'movement', label: 'Bergerak' },
+  { key: 'sleep', label: 'Tidur' },
+  { key: 'nutrition', label: 'Nutrisi' },
+  { key: 'supplement', label: 'Suplemen' },
+  { key: 'lifestyle', label: 'Gaya Hidup' },
+  { key: 'mental', label: 'Mental' },
+  { key: 'cleanliness', label: 'Kebersihan' },
+];
+
+function getHealthScopeText() {
+  return [
+    'Anda adalah asisten kesehatan yang hanya menjawab pertanyaan seputar kesehatan dan teks.',
+    'Jawab singkat, aman, dan edukatif. Jika pertanyaan di luar kesehatan, tolak dengan sopan.',
+    'Tolak permintaan image generation, audio generation, video generation, coding, hacking, dan topik non-kesehatan lain.',
+    'Jangan klaim sebagai dokter. Sertakan anjuran mencari bantuan medis darurat jika ada tanda bahaya.',
+  ].join(' ');
+}
+
+function normalizeQuestion(question = '') {
+  return String(question).trim().toLowerCase();
+}
+
+function isHealthQuestion(question = '') {
+  const normalized = normalizeQuestion(question);
+  if (!normalized) return false;
+
+  if (healthScopeSpec.disallowedTopics.some((phrase) => normalized.includes(phrase))) {
+    return false;
+  }
+
+  const healthKeywords = [
+    'kesehatan', 'gejala', 'demam', 'batuk', 'pilek', 'nyeri', 'obat', 'dosis', 'vaksin',
+    'p3k', 'pertolongan', 'darurat', 'rumah sakit', 'klinik', 'faskes', 'tekanan darah',
+    'gula darah', 'asam urat', 'kolesterol', 'kehamilan', 'anak', 'bayi', 'gizi', 'nutrisi',
+    'diet', 'tidur', 'air putih', 'olahraga', 'bergerak', 'mental', 'stres', 'cemas', 'depresi',
+    'cuci tangan', 'masker', 'infeksi', 'vaksin', 'imun', 'vitamin',
+  ];
+
+  return healthKeywords.some((keyword) => normalized.includes(keyword));
+}
+
+function buildHealthResponse(question) {
+  const normalized = normalizeQuestion(question);
+
+  if (!isHealthQuestion(question)) {
+    return {
+      allowed: false,
+      answer: 'Maaf, saya hanya bisa membantu pertanyaan teks seputar kesehatan. Saya tidak melayani image generation, coding, atau topik non-kesehatan.',
+    };
+  }
+
+  if (normalized.includes('darurat') || normalized.includes('sesak napas') || normalized.includes('nyeri dada') || normalized.includes('pingsan')) {
+    return {
+      allowed: true,
+      answer: 'Jika ada tanda darurat seperti sesak napas berat, nyeri dada, atau pingsan, segera ke IGD terdekat atau hubungi 119. Jangan tunda pertolongan medis.',
+    };
+  }
+
+  if (normalized.includes('demam')) {
+    return {
+      allowed: true,
+      answer: 'Untuk demam ringan, istirahat cukup, minum cukup, dan pantau suhu. Bila demam tinggi, lebih dari 3 hari, atau disertai sesak, ke dokter segera.',
+    };
+  }
+
+  if (normalized.includes('tekanan darah')) {
+    return {
+      allowed: true,
+      answer: 'Secara umum tekanan darah dewasa sering dianggap normal sekitar 120/80 mmHg, namun interpretasi tetap perlu melihat usia, kondisi tubuh, dan riwayat kesehatan.',
+    };
+  }
+
+  if (normalized.includes('gula darah')) {
+    return {
+      allowed: true,
+      answer: 'Gula darah normal bergantung pada waktu pemeriksaan. Jika Anda ingin, saya bisa bantu jelaskan puasa, sewaktu, atau 2 jam setelah makan.',
+    };
+  }
+
+  return {
+    allowed: true,
+    answer: 'Saya bisa bantu dari sisi edukasi kesehatan umum. Silakan beri detail gejala, usia, dan durasi keluhan agar saya bisa menjawab lebih tepat. Jika ada tanda bahaya, segera periksa ke tenaga kesehatan.',
+  };
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 15 * 1024 * 1024 },
@@ -549,6 +662,237 @@ app.get('/debug/database', async (_req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: 'Gagal memeriksa database' });
+  }
+});
+
+app.get('/health/stats', authenticateToken, async (req, res) => {
+  try {
+    const user = await db.get('SELECT id, created_at FROM users WHERE id = ?', [req.user.id]);
+    if (!user) return res.status(404).json({ error: 'Pengguna tidak ditemukan' });
+
+    const rows = await db.all(
+      `SELECT stat_date, category_key, category_label, value
+       FROM health_stat_entries
+       WHERE user_id = ?
+       ORDER BY stat_date DESC, category_key ASC`,
+      [req.user.id],
+    );
+
+    const startedAt = new Date(user.created_at);
+    const today = new Date();
+    const totalTrackedDays = Math.max(1, Math.ceil((today.getTime() - startedAt.getTime()) / 86400000));
+
+    const byCategory = new Map();
+    for (const category of healthCategories) {
+      byCategory.set(category.key, {
+        key: category.key,
+        label: category.label,
+        completedDays: 0,
+        totalDays: 0,
+        percentage: 0,
+        monthly: [],
+        yearly: [],
+      });
+    }
+
+    const monthTotals = new Map();
+    const yearTotals = new Map();
+
+    for (const row of rows) {
+      const category = byCategory.get(row.category_key);
+      if (!category) continue;
+      const done = row.value === true || row.value === 1 || row.value === 'true';
+      category.totalDays += 1;
+      if (done) category.completedDays += 1;
+
+      const monthKey = String(row.stat_date).slice(0, 7);
+      const yearKey = String(row.stat_date).slice(0, 4);
+      monthTotals.set(monthKey, (monthTotals.get(monthKey) || 0) + 1);
+      yearTotals.set(yearKey, (yearTotals.get(yearKey) || 0) + 1);
+    }
+
+    const monthlyByCategory = await db.all(
+      `SELECT to_char(stat_date, 'YYYY-MM') AS period, category_key, COUNT(*)::int AS total, COUNT(*) FILTER (WHERE value = TRUE)::int AS completed
+       FROM health_stat_entries
+       WHERE user_id = ?
+       GROUP BY period, category_key
+       ORDER BY period DESC`,
+      [req.user.id],
+    );
+
+    const yearlyByCategory = await db.all(
+      `SELECT to_char(stat_date, 'YYYY') AS period, category_key, COUNT(*)::int AS total, COUNT(*) FILTER (WHERE value = TRUE)::int AS completed
+       FROM health_stat_entries
+       WHERE user_id = ?
+       GROUP BY period, category_key
+       ORDER BY period DESC`,
+      [req.user.id],
+    );
+
+    for (const item of monthlyByCategory) {
+      const category = byCategory.get(item.category_key);
+      if (!category) continue;
+      category.monthly.push({
+        month: item.period,
+        completedDays: Number(item.completed || 0),
+        totalDays: Number(item.total || 0),
+        percentage: item.total ? Math.round((Number(item.completed || 0) / Number(item.total)) * 100) : 0,
+      });
+    }
+
+    for (const item of yearlyByCategory) {
+      const category = byCategory.get(item.category_key);
+      if (!category) continue;
+      category.yearly.push({
+        month: item.period,
+        completedDays: Number(item.completed || 0),
+        totalDays: Number(item.total || 0),
+        percentage: item.total ? Math.round((Number(item.completed || 0) / Number(item.total)) * 100) : 0,
+      });
+    }
+
+    const categories = Array.from(byCategory.values()).map((category) => ({
+      ...category,
+      percentage: Math.round((category.completedDays / Math.max(1, totalTrackedDays)) * 100),
+    }));
+
+    res.json({
+      memberSince: user.created_at,
+      daysSinceJoined: totalTrackedDays,
+      totalTrackedDays,
+      categories,
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal memuat statistik kesehatan' });
+  }
+});
+
+app.post('/health/stats', authenticateToken, async (req, res) => {
+  try {
+    const { categoryKey, categoryLabel, value = true, statDate = new Date().toISOString().slice(0, 10) } = req.body || {};
+    if (!categoryKey || !categoryLabel) {
+      return res.status(400).json({ error: 'Kategori statistik wajib diisi' });
+    }
+
+    await db.query(
+      `INSERT INTO health_stat_entries (user_id, stat_date, category_key, category_label, value)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (user_id, stat_date, category_key)
+       DO UPDATE SET value = EXCLUDED.value, category_label = EXCLUDED.category_label`,
+      [req.user.id, statDate, categoryKey, categoryLabel, Boolean(value)],
+    );
+
+    res.status(201).json({ message: 'Statistik kesehatan tersimpan' });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal menyimpan statistik kesehatan' });
+  }
+});
+
+app.get('/chat/conversations', authenticateToken, async (req, res) => {
+  try {
+    const conversations = await db.all(
+      `SELECT id, title, created_at, updated_at
+       FROM chat_conversations
+       WHERE user_id = ?
+       ORDER BY updated_at DESC`,
+      [req.user.id],
+    );
+
+    res.json(
+      conversations.map((conversation) => ({
+        id: conversation.id,
+        title: conversation.title,
+        createdAt: conversation.created_at,
+        updatedAt: conversation.updated_at,
+      })),
+    );
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal memuat riwayat percakapan' });
+  }
+});
+
+app.get('/chat/conversations/:id', authenticateToken, async (req, res) => {
+  try {
+    const conversation = await db.get(
+      `SELECT id, title, created_at, updated_at
+       FROM chat_conversations
+       WHERE id = ? AND user_id = ?`,
+      [req.params.id, req.user.id],
+    );
+    if (!conversation) return res.status(404).json({ error: 'Percakapan tidak ditemukan' });
+
+    const messages = await db.all(
+      `SELECT id, role, content, created_at
+       FROM chat_messages
+       WHERE conversation_id = ?
+       ORDER BY id ASC`,
+      [req.params.id],
+    );
+
+    res.json({
+      id: conversation.id,
+      title: conversation.title,
+      createdAt: conversation.created_at,
+      updatedAt: conversation.updated_at,
+      messages: messages.map((message) => ({
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        createdAt: message.created_at,
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal memuat percakapan' });
+  }
+});
+
+app.post('/chat/messages', authenticateToken, async (req, res) => {
+  try {
+    const question = String(req.body?.message || '').trim();
+    const assistantAnswer = String(req.body?.assistantAnswer || '').trim();
+    if (!question) {
+      return res.status(400).json({ error: 'Pertanyaan tidak boleh kosong' });
+    }
+
+    const response = buildHealthResponse(question);
+    const conversationId = Number(req.body?.conversationId || 0);
+
+    let activeConversationId = conversationId;
+    if (!activeConversationId) {
+      const title = question.slice(0, 48) || 'Percakapan kesehatan';
+      const created = await db.query(
+        `INSERT INTO chat_conversations (user_id, title)
+         VALUES ($1, $2)
+         RETURNING id`,
+        [req.user.id, title],
+      );
+      activeConversationId = created.rows?.[0]?.id;
+    }
+
+    await db.query(
+      `INSERT INTO chat_messages (conversation_id, role, content)
+       VALUES ($1, $2, $3)`,
+      [activeConversationId, 'user', question],
+    );
+
+    const finalAnswer = assistantAnswer || response.answer;
+
+    await db.query(
+      `INSERT INTO chat_messages (conversation_id, role, content)
+       VALUES ($1, $2, $3)`,
+      [activeConversationId, 'assistant', finalAnswer],
+    );
+
+    await db.query(`UPDATE chat_conversations SET updated_at = NOW() WHERE id = $1`, [activeConversationId]);
+
+    res.status(201).json({
+      conversationId: activeConversationId,
+      allowed: response.allowed,
+      answer: finalAnswer,
+      scope: getHealthScopeText(),
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal memproses pertanyaan' });
   }
 });
 
