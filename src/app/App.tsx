@@ -50,6 +50,7 @@ export default function App() {
   const [scrollY, setScrollY] = useState(0);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [session, setSession] = useState<AuthSession | null>(null);
+  const [authError, setAuthError] = useState("");
   const [articles, setArticles] = useState<Article[]>([]);
   const [articlesError, setArticlesError] = useState("");
   const [dailyTip, setDailyTip] = useState<{ title: string; desc: string } | null>(null);
@@ -68,6 +69,40 @@ export default function App() {
       localStorage.removeItem(SESSION_KEY);
     }
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const validateSession = async () => {
+      if (!session?.token) return;
+
+      try {
+        const response = await apiFetch("/profile", {
+          headers: { Authorization: `Bearer ${session.token}` },
+        });
+
+        if (response.ok || cancelled) {
+          return;
+        }
+
+        if (response.status === 401 || response.status === 403) {
+          const data = await response.json().catch(() => ({}));
+          localStorage.removeItem(SESSION_KEY);
+          setSession(null);
+          setScreen("home");
+          setAuthError(data.error || "Sesi login tidak valid. Silakan masuk lagi.");
+        }
+      } catch {
+        // Keep stale sessions only when the network itself is temporarily unavailable.
+      }
+    };
+
+    void validateSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
 
   useEffect(() => {
     const el = mainRef.current;
@@ -156,12 +191,14 @@ export default function App() {
 
   const onAuthSuccess = (nextSession: AuthSession) => {
     setSession(nextSession);
+    setAuthError("");
     localStorage.setItem(SESSION_KEY, JSON.stringify(nextSession));
     setScreen("home");
   };
 
   const onLogout = () => {
     setSession(null);
+    setAuthError("");
     setScreen("home");
     localStorage.removeItem(SESSION_KEY);
   };
@@ -356,6 +393,11 @@ export default function App() {
       </header>
 
       <main ref={mainRef} className="flex-1 overflow-y-auto min-h-0">
+        {authError && !session && (
+          <div className="mx-4 mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 sm:mx-6">
+            {authError}
+          </div>
+        )}
         {screen === "home" && <HomeScreen onNavigate={(s, tab) => navigate(s, tab)} articles={articles} articleError={articlesError} dailyTip={dailyTip || undefined} isAuthenticated={isAuthenticated} />}
         {screen !== "home" && (
           <div className="h-full flex flex-col pt-14 sm:pt-16">

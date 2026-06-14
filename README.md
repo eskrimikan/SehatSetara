@@ -42,6 +42,12 @@ VITE_API_BASE_URL=http://10.0.2.15:8080 npm run dev
 
 If you run the stack with Docker Compose, that value is already wired to the `backend` service.
 
+## Tanya / Chat AI
+
+The Tanya tab uses Puter.js in the browser as the primary AI path. The client waits up to about 55 seconds for a response, then still posts the message to the backend so the conversation is saved and a local health fallback can answer if Puter is unavailable.
+
+If Puter is blocked by the browser or the network, the tab can still return a backend fallback answer instead of hanging indefinitely.
+
 ## Run Locally
 
 ```bash

@@ -1,241 +1,94 @@
+const fs = require('fs');
+const path = require('path');
 const bcrypt = require('bcryptjs');
-const { Pool } = require('pg');
+const sqlite3 = require('sqlite3').verbose();
 
-function buildPoolConfig() {
-  const baseConfig = {
-    host: process.env.PGHOST || '127.0.0.1',
-    port: Number(process.env.PGPORT || 5432),
-    database: process.env.PGDATABASE || 'sehatsetara',
-  };
+const SQLITE_PATH = path.join(__dirname, 'database.db');
+const database = new sqlite3.Database(SQLITE_PATH);
 
-  if (process.env.DATABASE_URL) {
-    return [{ connectionString: process.env.DATABASE_URL }];
-  }
+database.exec('PRAGMA foreign_keys = ON');
 
-  return [
-    {
-      ...baseConfig,
-      user: process.env.PGUSER || 'sehatsetara',
-      password: process.env.PGPASSWORD || 'sehatsetara',
-    },
-    {
-      ...baseConfig,
-      user: 'postgres',
-      password: 'sehatsetara',
-    },
-    {
-      ...baseConfig,
-      user: 'postgres',
-      password: 'postgres',
-    },
-    {
-      ...baseConfig,
-      user: 'sehatsetara',
-      password: 'postgres',
-    },
-  ];
+function toSqliteQuery(sql) {
+  return String(sql)
+    .replace(/\$\d+/g, '?')
+    .replace(/NOW\(\)/gi, 'CURRENT_TIMESTAMP')
+    .replace(/::int\b/gi, '')
+    .replace(/::jsonb\b/gi, '')
+    .replace(/COUNT\(\*\) FILTER \(WHERE value = TRUE\)::int/gi, 'SUM(CASE WHEN value IN (1, "1", TRUE, "true") THEN 1 ELSE 0 END)')
+    .replace(/to_char\(stat_date,\s*'YYYY-MM'\)/gi, "strftime('%Y-%m', stat_date)")
+    .replace(/to_char\(stat_date,\s*'YYYY'\)/gi, "strftime('%Y', stat_date)")
+    .replace(/::text\b/gi, '')
+    .replace(/BOOLEAN NOT NULL DEFAULT TRUE/gi, 'INTEGER NOT NULL DEFAULT 1')
+    .replace(/BOOLEAN NOT NULL DEFAULT FALSE/gi, 'INTEGER NOT NULL DEFAULT 0')
+    .replace(/BOOLEAN NOT NULL DEFAULT TRUE/gi, 'INTEGER NOT NULL DEFAULT 1')
+    .replace(/BOOLEAN/gi, 'INTEGER')
+    .replace(/TIMESTAMPTZ NOT NULL DEFAULT NOW\(\)/gi, 'TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP')
+    .replace(/DOUBLE PRECISION/gi, 'REAL')
+    .replace(/BYTEA/gi, 'BLOB')
+    .replace(/JSONB NOT NULL DEFAULT '\{\}'::jsonb/gi, 'TEXT NOT NULL DEFAULT "{}"')
+    .replace(/ON CONFLICT \(setting_key\) DO NOTHING/gi, 'ON CONFLICT(setting_key) DO NOTHING')
+    .replace(/ON CONFLICT \(username\) DO UPDATE/gi, 'ON CONFLICT(username) DO UPDATE')
+    .replace(/excluded\./gi, 'excluded.')
+    .replace(/CURRENT_TIMESTAMP\(\)/gi, 'CURRENT_TIMESTAMP');
 }
 
-async function connectPool() {
-  const configs = buildPoolConfig();
-  let lastError = null;
+function normalizeParam(value) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  if (Buffer.isBuffer(value)) {
+    return value;
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (typeof value === 'boolean') {
+    return value ? 1 : 0;
+  }
+  if (typeof value === 'object') {
+    return JSON.stringify(value);
+  }
+  return value;
+}
 
-  for (const config of configs) {
-    const candidatePool = new Pool(config);
-    try {
-      await candidatePool.query('SELECT 1');
-      return candidatePool;
-    } catch (error) {
-      lastError = error;
-      await candidatePool.end().catch(() => {});
+function normalizeRow(row) {
+  if (!row) {
+    return row;
+  }
+
+  const normalized = { ...row };
+  for (const key of ['is_approved', 'is_pinned', 'value']) {
+    if (key in normalized) {
+      const current = normalized[key];
+      normalized[key] = current === 1 || current === '1' || current === true || current === 'true';
     }
   }
 
-  throw lastError || new Error('Tidak dapat terhubung ke PostgreSQL');
-}
-
-let pool;
-
-function toPgQuery(sql) {
-  let index = 0;
-  return String(sql).replace(/\?/g, () => `$${++index}`);
-}
-
-async function initSchema() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id BIGSERIAL PRIMARY KEY,
-      username TEXT UNIQUE NOT NULL,
-      password TEXT NOT NULL,
-      role TEXT NOT NULL,
-      is_approved BOOLEAN NOT NULL DEFAULT TRUE,
-      requested_role TEXT NOT NULL DEFAULT '',
-      full_name TEXT DEFAULT '',
-      age TEXT DEFAULT '',
-      province TEXT DEFAULT '',
-      city TEXT DEFAULT '',
-      district TEXT DEFAULT '',
-      hospital_name TEXT DEFAULT '',
-      latitude DOUBLE PRECISION,
-      longitude DOUBLE PRECISION,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS requested_role TEXT NOT NULL DEFAULT ''`);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS articles (
-      id BIGSERIAL PRIMARY KEY,
-      title TEXT NOT NULL,
-      content TEXT NOT NULL,
-      media_path TEXT,
-      is_pinned BOOLEAN NOT NULL DEFAULT FALSE,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      author_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS site_settings (
-      setting_key TEXT PRIMARY KEY,
-      setting_value JSONB NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS audit_logs (
-      id BIGSERIAL PRIMARY KEY,
-      actor_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
-      actor_username TEXT NOT NULL DEFAULT '',
-      actor_role TEXT NOT NULL DEFAULT '',
-      action TEXT NOT NULL,
-      target_type TEXT NOT NULL DEFAULT '',
-      target_id TEXT NOT NULL DEFAULT '',
-      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-      ip_address TEXT NOT NULL DEFAULT '',
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS media_assets (
-      id BIGSERIAL PRIMARY KEY,
-      filename TEXT NOT NULL,
-      mime_type TEXT NOT NULL,
-      byte_size INTEGER NOT NULL,
-      data BYTEA NOT NULL,
-      uploaded_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS health_stat_entries (
-      id BIGSERIAL PRIMARY KEY,
-      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      stat_date DATE NOT NULL,
-      category_key TEXT NOT NULL,
-      category_label TEXT NOT NULL,
-      value BOOLEAN NOT NULL DEFAULT TRUE,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE (user_id, stat_date, category_key)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS chat_conversations (
-      id BIGSERIAL PRIMARY KEY,
-      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      title TEXT NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS chat_messages (
-      id BIGSERIAL PRIMARY KEY,
-      conversation_id BIGINT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
-      role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-      content TEXT NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  const doctorPassword = await bcrypt.hash('rahasia123', 10);
-  await pool.query(
-    `INSERT INTO users (username, password, role, is_approved, full_name)
-     VALUES ($1, $2, $3, TRUE, $4)
-     ON CONFLICT (username) DO UPDATE
-       SET password = EXCLUDED.password,
-           role = EXCLUDED.role,
-           is_approved = TRUE,
-           full_name = EXCLUDED.full_name`,
-    ['dokter', doctorPassword, 'dokter', 'Dokter Demo'],
-  );
-
-  const superadminPassword = await bcrypt.hash('akuadmin', 10);
-  await pool.query(
-    `INSERT INTO users (username, password, role, is_approved, full_name)
-     VALUES ($1, $2, $3, TRUE, $4)
-     ON CONFLICT (username) DO UPDATE
-       SET password = EXCLUDED.password,
-           role = EXCLUDED.role,
-           is_approved = TRUE,
-           full_name = EXCLUDED.full_name`,
-    ['admin', superadminPassword, 'superadmin', 'Super Admin'],
-  );
-
-  await pool.query(
-    `INSERT INTO site_settings (setting_key, setting_value)
-     VALUES ($1, $2)
-     ON CONFLICT (setting_key) DO NOTHING`,
-    [
-      'daily_health_tip',
-      { title: 'Tidur 7–8 Jam Per Malam', desc: 'Tidur cukup meningkatkan imunitas dan membantu tubuh memperbaiki sel-sel yang rusak.' },
-    ],
-  );
-
-  await pool.query(`UPDATE users SET role = 'dokter' WHERE role = 'produsen'`);
-}
-
-const ready = (async () => {
-  pool = await connectPool();
-  await initSchema();
-})();
-
-function run(sql, params = [], callback) {
-  const normalizedSql = /\breturning\b/i.test(sql) || !/^\s*(insert|update|delete)\b/i.test(sql)
-    ? toPgQuery(sql)
-    : `${toPgQuery(sql)} RETURNING id`;
-
-  const promise = pool.query(normalizedSql, params);
-
-  if (typeof callback === 'function') {
-    promise.then((result) => {
-      callback.call({ lastID: result.rows?.[0]?.id, changes: result.rowCount }, null);
-    }).catch((error) => callback.call({ lastID: 0, changes: 0 }, error));
-    return undefined;
+  for (const key of ['setting_value', 'metadata']) {
+    if (typeof normalized[key] === 'string') {
+      try {
+        normalized[key] = JSON.parse(normalized[key]);
+      } catch {
+        // Leave the raw value intact if the column is not JSON.
+      }
+    }
   }
 
-  return promise.then((result) => ({ lastID: result.rows?.[0]?.id, changes: result.rowCount }));
-}
-
-function get(sql, params = [], callback) {
-  const promise = pool.query(toPgQuery(sql), params).then((result) => result.rows[0] || undefined);
-
-  if (typeof callback === 'function') {
-    promise.then((row) => callback(null, row)).catch((error) => callback(error));
-    return undefined;
-  }
-
-  return promise;
+  return normalized;
 }
 
 function all(sql, params = [], callback) {
-  const promise = pool.query(toPgQuery(sql), params).then((result) => result.rows);
+  const normalizedSql = toSqliteQuery(sql);
+  const normalizedParams = params.map(normalizeParam);
+  const promise = new Promise((resolve, reject) => {
+    database.all(normalizedSql, normalizedParams, (error, rows) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve((rows || []).map(normalizeRow));
+    });
+  });
 
   if (typeof callback === 'function') {
     promise.then((rows) => callback(null, rows)).catch((error) => callback(error));
@@ -245,10 +98,233 @@ function all(sql, params = [], callback) {
   return promise;
 }
 
+function get(sql, params = [], callback) {
+  const normalizedSql = toSqliteQuery(sql);
+  const normalizedParams = params.map(normalizeParam);
+  const promise = new Promise((resolve, reject) => {
+    database.get(normalizedSql, normalizedParams, (error, row) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(normalizeRow(row));
+    });
+  });
+
+  if (typeof callback === 'function') {
+    promise.then((row) => callback(null, row)).catch((error) => callback(error));
+    return undefined;
+  }
+
+  return promise;
+}
+
+function run(sql, params = [], callback) {
+  const normalizedSql = toSqliteQuery(sql);
+  const normalizedParams = params.map(normalizeParam);
+  const promise = new Promise((resolve, reject) => {
+    database.run(normalizedSql, normalizedParams, function onRun(error) {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve({ lastID: this.lastID || 0, changes: this.changes || 0 });
+    });
+  });
+
+  if (typeof callback === 'function') {
+    promise.then((result) => callback.call({ lastID: result.lastID, changes: result.changes }, null)).catch((error) => callback.call({ lastID: 0, changes: 0 }, error));
+    return undefined;
+  }
+
+  return promise;
+}
+
+function isReadQuery(sql) {
+  return /^\s*(select|with|pragma)\b/i.test(String(sql)) || /\breturning\b/i.test(String(sql));
+}
+
+function execute(sql, params = []) {
+  const normalizedSql = toSqliteQuery(sql);
+  const normalizedParams = params.map(normalizeParam);
+
+  if (isReadQuery(normalizedSql)) {
+    return all(normalizedSql, normalizedParams).then((rows) => ({ rows, rowCount: rows.length }));
+  }
+
+  return run(normalizedSql, normalizedParams).then((result) => ({ rows: [], rowCount: result.changes, lastID: result.lastID, changes: result.changes }));
+}
+
+async function ensureColumn(table, columnSql, columnName) {
+  const columns = await all(`PRAGMA table_info(${table})`);
+  if (!columns.some((column) => column.name === columnName)) {
+    await run(`ALTER TABLE ${table} ADD COLUMN ${columnSql}`);
+  }
+}
+
+async function initSchema() {
+  await run('PRAGMA foreign_keys = ON');
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE NOT NULL,
+      password TEXT NOT NULL,
+      role TEXT NOT NULL,
+      is_approved INTEGER NOT NULL DEFAULT 1,
+      requested_role TEXT NOT NULL DEFAULT '',
+      full_name TEXT DEFAULT '',
+      age TEXT DEFAULT '',
+      province TEXT DEFAULT '',
+      city TEXT DEFAULT '',
+      district TEXT DEFAULT '',
+      hospital_name TEXT DEFAULT '',
+      latitude REAL,
+      longitude REAL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS articles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      media_path TEXT,
+      is_pinned INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS site_settings (
+      setting_key TEXT PRIMARY KEY,
+      setting_value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      actor_username TEXT NOT NULL DEFAULT '',
+      actor_role TEXT NOT NULL DEFAULT '',
+      action TEXT NOT NULL,
+      target_type TEXT NOT NULL DEFAULT '',
+      target_id TEXT NOT NULL DEFAULT '',
+      metadata TEXT NOT NULL DEFAULT '{}',
+      ip_address TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS media_assets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      byte_size INTEGER NOT NULL,
+      data BLOB NOT NULL,
+      uploaded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS health_stat_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      stat_date TEXT NOT NULL,
+      category_key TEXT NOT NULL,
+      category_label TEXT NOT NULL,
+      value INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (user_id, stat_date, category_key)
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS chat_conversations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id INTEGER NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await ensureColumn('users', "requested_role TEXT NOT NULL DEFAULT ''", 'requested_role');
+  await ensureColumn('users', "full_name TEXT DEFAULT ''", 'full_name');
+  await ensureColumn('users', "age TEXT DEFAULT ''", 'age');
+  await ensureColumn('users', "province TEXT DEFAULT ''", 'province');
+  await ensureColumn('users', "city TEXT DEFAULT ''", 'city');
+  await ensureColumn('users', "district TEXT DEFAULT ''", 'district');
+  await ensureColumn('users', "hospital_name TEXT DEFAULT ''", 'hospital_name');
+  await ensureColumn('users', 'latitude REAL', 'latitude');
+  await ensureColumn('users', 'longitude REAL', 'longitude');
+  await ensureColumn('articles', 'media_path TEXT', 'media_path');
+  await ensureColumn('articles', 'is_pinned INTEGER NOT NULL DEFAULT 0', 'is_pinned');
+  await ensureColumn('articles', 'created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP', 'created_at');
+  await ensureColumn('articles', 'author_id INTEGER NOT NULL DEFAULT 1', 'author_id');
+
+  const doctorPassword = await bcrypt.hash('rahasia123', 10);
+  await run(
+    `INSERT INTO users (username, password, role, is_approved, full_name)
+     VALUES (?, ?, ?, 1, ?)
+     ON CONFLICT(username) DO UPDATE SET
+       password = excluded.password,
+       role = excluded.role,
+       is_approved = 1,
+       full_name = excluded.full_name`,
+    ['dokter', doctorPassword, 'dokter', 'Dokter Demo'],
+  );
+
+  const superadminPassword = await bcrypt.hash('akuadmin', 10);
+  await run(
+    `INSERT INTO users (username, password, role, is_approved, full_name)
+     VALUES (?, ?, ?, 1, ?)
+     ON CONFLICT(username) DO UPDATE SET
+       password = excluded.password,
+       role = excluded.role,
+       is_approved = 1,
+       full_name = excluded.full_name`,
+    ['admin', superadminPassword, 'superadmin', 'Super Admin'],
+  );
+
+  await run(
+    `INSERT INTO site_settings (setting_key, setting_value)
+     VALUES (?, ?)
+     ON CONFLICT(setting_key) DO NOTHING`,
+    [
+      'daily_health_tip',
+      { title: 'Tidur 7–8 Jam Per Malam', desc: 'Tidur cukup meningkatkan imunitas dan membantu tubuh memperbaiki sel-sel yang rusak.' },
+    ],
+  );
+
+  await run(`UPDATE users SET role = 'dokter' WHERE role = 'produsen'`);
+}
+
+const ready = initSchema().catch((error) => {
+  console.error('Gagal menyiapkan database lokal:', error);
+  throw error;
+});
+
 module.exports = {
-  pool,
+  pool: database,
   ready,
-  query: (sql, params = []) => pool.query(toPgQuery(sql), params),
+  query: execute,
   run,
   get,
   all,

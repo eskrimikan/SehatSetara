@@ -185,11 +185,9 @@ export default function VoiceQAScreen({ authToken, initialQuery, clearQuery }: P
 
     try {
       const puter = window.puter;
-      if (!puter?.ai?.chat) {
-        throw new Error("Puter.js belum siap dimuat");
-      }
-
-      const answerRaw = await waitForAnswer(puter.ai.chat(buildSystemPrompt(trimmed), { model: "gpt-5.4-nano" }), 60000);
+      const answerRaw = puter?.ai?.chat
+        ? await waitForAnswer(puter.ai.chat(buildSystemPrompt(trimmed), { model: "gpt-5.4-nano" }), 55000)
+        : null;
       const answer = normalizeAnswer(answerRaw);
 
       const response = await apiFetch("/chat/messages", {
